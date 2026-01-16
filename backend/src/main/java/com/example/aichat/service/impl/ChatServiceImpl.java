@@ -16,6 +16,10 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import reactor.core.publisher.Flux;
+import java.util.Collections;
+
 @Service // 标注为 Spring 服务组件
 @RequiredArgsConstructor // 自动生成构造函数，注入依赖
 public class ChatServiceImpl implements ChatService {
@@ -23,6 +27,7 @@ public class ChatServiceImpl implements ChatService {
     private final ConversationMapper conversationMapper; // 会话数据访问对象
     private final MessageMapper messageMapper; // 消息数据访问对象
     private final WebClient deepSeekClient; // WebClient，用于调用外部服务
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public Conversation createConversation(Long userId, ConversationCreateRequest request) {
@@ -68,6 +73,84 @@ public class ChatServiceImpl implements ChatService {
         messageMapper.insert(aiMsg);
         conversationMapper.touch(conversationId);
         return aiMsg;
+    }
+
+    @Override
+    public Flux<String> streamMessage(Long userId, Long conversationId, ChatMessageRequest request) {
+        ensureConversationOwner(userId, conversationId);
+        
+        // 保存用户消息
+        Message userMsg = new Message();
+        userMsg.setConversationId(conversationId);
+        userMsg.setRole("user");
+        userMsg.setContent(request.getContent());
+        messageMapper.insert(userMsg);
+
+        StringBuilder fullContent = new StringBuilder();
+
+        return deepSeekClient.post()
+                .uri("/v1/chat/completions")
+                .bodyValue(Map.of(
+                        "model", "deepseek-chat",
+                        "stream", true,
+                        "temperature", 0.7,
+                        "messages", List.of(Map.of(
+                                "role", "user",
+                                "content", request.getContent()
+                        ))
+                ))
+                .retrieve()
+                .bodyToFlux(String.class)
+                .map(this::parseContentFromChunk)
+                .filter(content -> !content.isEmpty())
+                .doOnNext(fullContent::append)
+                .doOnComplete(() -> {
+                    // 保存 AI 消息
+                    if (fullContent.length() > 0) {
+                        Message aiMsg = new Message();
+                        aiMsg.setConversationId(conversationId);
+                        aiMsg.setRole("assistant");
+                        aiMsg.setContent(fullContent.toString());
+                        messageMapper.insert(aiMsg);
+                        conversationMapper.touch(conversationId);
+                    }
+                })
+                .onErrorResume(ex -> {
+                    System.err.println("Stream Error: " + ex.getMessage());
+                    return Flux.empty();
+                });
+    }
+
+    private String parseContentFromChunk(String chunk) {
+        if (chunk == null || chunk.isBlank()) return "";
+        
+        String[] lines = chunk.split("\n");
+        StringBuilder sb = new StringBuilder();
+        
+        for (String line : lines) {
+            line = line.trim();
+            if (line.startsWith("data: ")) {
+                String json = line.substring(6);
+                if ("[DONE]".equals(json)) continue;
+                try {
+                    Map<String, Object> map = objectMapper.readValue(json, Map.class);
+                    List<?> choices = (List<?>) map.get("choices");
+                    if (choices != null && !choices.isEmpty()) {
+                        Map<?, ?> choice = (Map<?, ?>) choices.get(0);
+                        Map<?, ?> delta = (Map<?, ?>) choice.get("delta");
+                        if (delta != null) {
+                            Object content = delta.get("content");
+                            if (content != null) {
+                                sb.append(content.toString());
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    // ignore parse error
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private void ensureConversationOwner(Long userId, Long conversationId) {

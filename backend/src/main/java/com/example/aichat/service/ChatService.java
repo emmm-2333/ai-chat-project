@@ -44,4 +44,6 @@ public interface ChatService {
      * @return 发送的消息
      */
     Message sendMessage(Long userId, Long conversationId, ChatMessageRequest request);
+
+    reactor.core.publisher.Flux<String> streamMessage(Long userId, Long conversationId, ChatMessageRequest request);
 }

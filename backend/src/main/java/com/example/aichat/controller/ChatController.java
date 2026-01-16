@@ -47,4 +47,11 @@ public class ChatController {
         Long userId = 1L;
         return ApiResponse.success(chatService.sendMessage(userId, conversationId, body));
     }
+
+    @PostMapping(value = "/chat/{conversationId}/stream", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
+    public reactor.core.publisher.Flux<String> streamMessage(@PathVariable Long conversationId,
+            @Valid @RequestBody ChatMessageRequest body) {
+        Long userId = 1L;
+        return chatService.streamMessage(userId, conversationId, body);
+    }
 }
