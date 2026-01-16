@@ -2,7 +2,6 @@
 // 配置 Axios 实例和拦截器
 
 import axios from 'axios';
-import { ElMessage } from 'element-plus';
 
 // 创建 Axios 实例
 const instance = axios.create({
@@ -25,7 +24,7 @@ instance.interceptors.request.use((config) => {
 instance.interceptors.response.use(
   (response) => response.data, // 直接返回响应数据
   (error) => {
-    ElMessage.error(error.response?.data?.message || error.message); // 显示错误信息
+    alert(error.response?.data?.message || error.message); // 显示错误信息
     return Promise.reject(error);
   }
 );
